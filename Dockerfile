@@ -35,4 +35,5 @@ RUN composer run-script post-autoload-dump
 RUN chown -R www-data:www-data /app/storage /app/bootstrap/cache \
     && chmod -R 775 /app/storage /app/bootstrap/cache
 
-EXPOSE 80
+RUN setcap -r /usr/local/bin/frankenphp
+EXPOSE 8000
