@@ -9,7 +9,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
-#[Fillable(['title', 'slug', 'content', 'settings', 'is_published', 'lighthouse_scores', 'last_audited_at'])]
+#[Fillable(['user_id', 'title', 'slug', 'draft_content', 'published_content', 'settings', 'is_published', 'lighthouse_scores', 'last_audited_at', 'thumbnail_path'])]
 class Portfolio extends Model
 {
     use HasUuids;
@@ -17,7 +17,8 @@ class Portfolio extends Model
     protected function casts(): array
     {
         return [
-            'content' => 'array',
+            'draft_content' => 'array',
+            'published_content' => 'array',
             'settings' => 'array',
             'is_published' => 'boolean',
             'lighthouse_scores' => 'array',

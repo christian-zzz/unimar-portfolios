@@ -21,9 +21,12 @@ class UserController extends Controller
             ], 403);
         }
 
-        // Fetch students selecting only safe columns, ordered by registration date (newest first)
+        // Fetch students with eager loaded portfolio and media count/size aggregates
         $students = User::where('role', 'student')
             ->select(['id', 'name', 'email', 'created_at'])
+            ->with(['portfolio:id,user_id,slug,is_published'])
+            ->withCount('media')
+            ->withSum('media as media_size', 'size')
             ->orderByDesc('created_at')
             ->get();
 
