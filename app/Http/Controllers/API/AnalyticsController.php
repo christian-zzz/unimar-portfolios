@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\AppSetting;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
@@ -30,7 +31,12 @@ class AnalyticsController extends Controller
             return response()->json($this->fullEmptyResponse());
         }
 
-        return response()->json($this->resolveAnalytics($portfolio->slug));
+        $period = $request->query('period', '15d');
+        $force = $request->boolean('force', false);
+
+        $data = $this->resolveAnalytics($portfolio->slug, $period, $force, $portfolio);
+
+        return response()->json($data);
     }
 
     public function getGlobalReport(Request $request): JsonResponse
@@ -39,30 +45,63 @@ class AnalyticsController extends Controller
             return response()->json(['message' => 'Acceso denegado.'], 403);
         }
 
-        return response()->json($this->resolveAnalytics(null));
+        $period = $request->query('period', '15d');
+        $force = $request->boolean('force', false);
+
+        $data = $this->resolveAnalytics(null, $period, $force, null);
+
+        return response()->json($data);
     }
 
-    private function resolveAnalytics(?string $slug): array
+    private function resolveAnalytics(?string $slug, string $period, bool $force, $portfolio): array
     {
-        $cacheKey = $slug ?? 'global';
-        $histKey = "analytics_hist_{$cacheKey}";
-        $rtKey = "analytics_realtime_{$cacheKey}";
+        if ($period === 'live') {
+            $cacheKey = 'analytics_live_' . ($slug ?? 'global');
+            $realtime = Cache::remember($cacheKey, 60, function () use ($slug) {
+                return $this->fetchRealtime($slug);
+            });
+            return ['realtime' => $realtime];
+        }
 
-        $historical = Cache::remember($histKey, 900, function () use ($slug) {
-            return $this->fetchHistorical($slug);
-        });
+        $days = $period === '30d' ? 30 : 15;
 
-        $realtime = Cache::remember($rtKey, 60, function () use ($slug) {
-            return $this->fetchRealtime($slug);
-        });
+        if ($slug && $portfolio) {
+            $existing = $portfolio->analytics_data;
 
-        return [
-            'realtime' => $realtime,
-            'historical' => $historical,
-        ];
+            if (!$force && $existing && isset($existing[$period])) {
+                $existing[$period]['last_updated_at'] = $portfolio->last_analytics_updated_at?->toIso8601String();
+                return ['historical' => $existing[$period]];
+            }
+
+            $fresh = $this->fetchHistorical($slug, $days);
+            $portfolio->analytics_data = array_merge($existing ?? [], [$period => $fresh]);
+            $portfolio->last_analytics_updated_at = now();
+            $portfolio->save();
+
+            $fresh['last_updated_at'] = $portfolio->last_analytics_updated_at->toIso8601String();
+            return ['historical' => $fresh];
+        }
+
+        $settingKey = 'global_analytics_' . $period;
+        $setting = AppSetting::find($settingKey);
+
+        if (!$force && $setting && $setting->value) {
+            $val = $setting->value;
+            $val['last_updated_at'] = $setting->updated_at?->toIso8601String();
+            return ['historical' => $val];
+        }
+
+        $fresh = $this->fetchHistorical(null, $days);
+        AppSetting::updateOrCreate(
+            ['key' => $settingKey],
+            ['value' => $fresh, 'description' => "GA4 global analytics for last {$days} days"]
+        );
+
+        $fresh['last_updated_at'] = now()->toIso8601String();
+        return ['historical' => $fresh];
     }
 
-    private function fetchHistorical(?string $slug): array
+    private function fetchHistorical(?string $slug, int $days): array
     {
         $propertyId = config('analytics.property_id');
 
@@ -77,7 +116,7 @@ class AnalyticsController extends Controller
             ]);
 
             $property = 'properties/' . $propertyId;
-            $dateRange = new DateRange(['start_date' => '15daysAgo', 'end_date' => 'today']);
+            $dateRange = new DateRange(['start_date' => "{$days}daysAgo", 'end_date' => 'today']);
             $pageFilter = $slug ? $this->buildPageFilter($slug) : null;
 
             $dailyRes = $client->runReport(new RunReportRequest([

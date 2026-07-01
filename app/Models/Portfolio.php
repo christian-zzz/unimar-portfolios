@@ -23,6 +23,8 @@ class Portfolio extends Model
             'is_published' => 'boolean',
             'lighthouse_scores' => 'array',
             'last_audited_at' => 'datetime',
+            'analytics_data' => 'array',
+            'last_analytics_updated_at' => 'datetime',
         ];
     }
 
