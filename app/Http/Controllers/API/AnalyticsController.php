@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\Log;
 
 use Google\Analytics\Data\V1beta\Client\BetaAnalyticsDataClient;
 use Google\Analytics\Data\V1beta\RunReportRequest;
+use Google\Analytics\Data\V1beta\RunRealtimeReportRequest;
 use Google\Analytics\Data\V1beta\DateRange;
 use Google\Analytics\Data\V1beta\Dimension;
 use Google\Analytics\Data\V1beta\Metric;
@@ -26,27 +27,48 @@ class AnalyticsController extends Controller
         $portfolio = $user->portfolio;
 
         if (!$portfolio || !$portfolio->slug) {
-            return response()->json($this->emptyResponse());
+            return response()->json($this->fullEmptyResponse());
         }
 
-        $slug = $portfolio->slug;
-        $cacheKey = "analytics_report_{$user->id}_{$slug}";
-        $cacheTtl = (int) config('analytics.cache_ttl', 900);
-
-        $data = Cache::remember($cacheKey, $cacheTtl, function () use ($slug) {
-            return $this->fetchFromGa4($slug);
-        });
-
-        return response()->json($data);
+        return response()->json($this->resolveAnalytics($portfolio->slug));
     }
 
-    private function fetchFromGa4(string $slug): array
+    public function getGlobalReport(Request $request): JsonResponse
+    {
+        if ($request->user()->role !== 'admin') {
+            return response()->json(['message' => 'Acceso denegado.'], 403);
+        }
+
+        return response()->json($this->resolveAnalytics(null));
+    }
+
+    private function resolveAnalytics(?string $slug): array
+    {
+        $cacheKey = $slug ?? 'global';
+        $histKey = "analytics_hist_{$cacheKey}";
+        $rtKey = "analytics_realtime_{$cacheKey}";
+
+        $historical = Cache::remember($histKey, 900, function () use ($slug) {
+            return $this->fetchHistorical($slug);
+        });
+
+        $realtime = Cache::remember($rtKey, 60, function () use ($slug) {
+            return $this->fetchRealtime($slug);
+        });
+
+        return [
+            'realtime' => $realtime,
+            'historical' => $historical,
+        ];
+    }
+
+    private function fetchHistorical(?string $slug): array
     {
         $propertyId = config('analytics.property_id');
 
         if (!$propertyId) {
             Log::warning('GA4_PROPERTY_ID no está configurado.');
-            return $this->emptyResponse();
+            return $this->emptyHistoricalResponse();
         }
 
         try {
@@ -56,18 +78,8 @@ class AnalyticsController extends Controller
 
             $property = 'properties/' . $propertyId;
             $dateRange = new DateRange(['start_date' => '15daysAgo', 'end_date' => 'today']);
+            $pageFilter = $slug ? $this->buildPageFilter($slug) : null;
 
-            $pageFilter = new FilterExpression([
-                'filter' => new Filter([
-                    'field_name' => 'pagePath',
-                    'string_filter' => new StringFilter([
-                        'match_type' => MatchType::CONTAINS,
-                        'value' => "/p/{$slug}",
-                    ]),
-                ]),
-            ]);
-
-            // --- Q1: Daily + Totals ---
             $dailyRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
                 'date_ranges' => [$dateRange],
@@ -86,9 +98,8 @@ class AnalyticsController extends Controller
             foreach ($dailyRes->getRows() as $row) {
                 $dims = $row->getDimensionValues();
                 $met = $row->getMetricValues();
-                $dateStr = $dims[0]->getValue();
                 $daily[] = [
-                    'date' => date('m-d', strtotime((string) $dateStr)),
+                    'date' => date('m-d', strtotime((string) $dims[0]->getValue())),
                     'users' => (int) $met[0]->getValue(),
                     'views' => (int) $met[1]->getValue(),
                     'newUsers' => (int) $met[3]->getValue(),
@@ -98,7 +109,6 @@ class AnalyticsController extends Controller
 
             $totals = $this->extractTotals($dailyRes);
 
-            // --- Q2: Devices ---
             $devices = [];
             $devRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
@@ -114,7 +124,6 @@ class AnalyticsController extends Controller
                 ];
             }
 
-            // --- Q3: Traffic Sources ---
             $sources = [];
             $srcRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
@@ -130,7 +139,6 @@ class AnalyticsController extends Controller
                 ];
             }
 
-            // --- Q4: Countries ---
             $countries = [];
             $cntRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
@@ -154,13 +162,64 @@ class AnalyticsController extends Controller
                 'countries' => $countries,
             ];
         } catch (\Throwable $e) {
-            Log::error('Error en GA4 Data API: ' . $e->getMessage(), [
+            Log::error('Error en GA4 Historical API: ' . $e->getMessage(), [
                 'slug' => $slug,
                 'trace' => $e->getTraceAsString(),
             ]);
-
-            return $this->emptyResponse();
+            return $this->emptyHistoricalResponse();
         }
+    }
+
+    private function fetchRealtime(?string $slug): array
+    {
+        $propertyId = config('analytics.property_id');
+
+        if (!$propertyId) {
+            return ['activeUsers' => 0];
+        }
+
+        try {
+            $client = new BetaAnalyticsDataClient([
+                'credentials' => $this->resolveCredentials(),
+            ]);
+
+            $request = new RunRealtimeReportRequest([
+                'property' => 'properties/' . $propertyId,
+                'metrics' => [new Metric(['name' => 'activeUsers'])],
+            ]);
+
+            if ($slug) {
+                $request->setDimensionFilter($this->buildPageFilter($slug));
+            }
+
+            $response = $client->runRealtimeReport($request);
+
+            $users = 0;
+            foreach ($response->getRows() as $row) {
+                $users += (int) $row->getMetricValues()[0]->getValue();
+            }
+
+            return ['activeUsers' => $users];
+        } catch (\Throwable $e) {
+            Log::error('Error en GA4 Realtime API: ' . $e->getMessage(), [
+                'slug' => $slug,
+                'trace' => $e->getTraceAsString(),
+            ]);
+            return ['activeUsers' => 0];
+        }
+    }
+
+    private function buildPageFilter(string $slug): FilterExpression
+    {
+        return new FilterExpression([
+            'filter' => new Filter([
+                'field_name' => 'pagePath',
+                'string_filter' => new StringFilter([
+                    'match_type' => MatchType::CONTAINS,
+                    'value' => "/p/{$slug}",
+                ]),
+            ]),
+        ]);
     }
 
     private function extractTotals($response): array
@@ -209,7 +268,7 @@ class AnalyticsController extends Controller
         return number_format($value * 100, 1) . '%';
     }
 
-    private function emptyResponse(): array
+    private function emptyHistoricalResponse(): array
     {
         return [
             'totals' => [
@@ -223,6 +282,14 @@ class AnalyticsController extends Controller
             'devices' => [],
             'sources' => [],
             'countries' => [],
+        ];
+    }
+
+    private function fullEmptyResponse(): array
+    {
+        return [
+            'realtime' => ['activeUsers' => 0],
+            'historical' => $this->emptyHistoricalResponse(),
         ];
     }
 }

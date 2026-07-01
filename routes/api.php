@@ -70,8 +70,11 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/audit/run', [LighthouseController::class, 'runAudit']);
     Route::post('/audit/save', [LighthouseController::class, 'saveResults']);
 
-    // Analytics GA4 Routes
+    // Analytics GA4 Routes (Student — filtered by own portfolio)
     Route::get('/analytics/report', [AnalyticsController::class, 'getReport']);
+
+    // Analytics GA4 Routes (Admin — unfiltered global)
+    Route::get('/admin/analytics/report', [AnalyticsController::class, 'getGlobalReport']);
 
     // Media Upload Route
     Route::get('/media', [MediaController::class, 'index']);
