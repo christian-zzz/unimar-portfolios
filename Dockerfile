@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
         pdo_pgsql \
         pgsql \
         pcntl \
+        bcmath \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

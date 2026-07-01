@@ -57,10 +57,12 @@ class AnalyticsController extends Controller
     {
         if ($period === 'live') {
             $cacheKey = 'analytics_live_' . ($slug ?? 'global');
-            $realtime = Cache::remember($cacheKey, 60, function () use ($slug) {
-                return $this->fetchRealtime($slug);
+            if ($force) {
+                Cache::forget($cacheKey);
+            }
+            return Cache::remember($cacheKey, 60, function () use ($slug, $portfolio) {
+                return $this->fetchRealtime($slug, $portfolio);
             });
-            return ['realtime' => $realtime];
         }
 
         $days = $period === '30d' ? 30 : 15;
@@ -205,16 +207,18 @@ class AnalyticsController extends Controller
                 'slug' => $slug,
                 'trace' => $e->getTraceAsString(),
             ]);
-            return $this->emptyHistoricalResponse();
+            return array_merge($this->emptyHistoricalResponse(), [
+                'debug_error' => $e->getMessage()
+            ]);
         }
     }
 
-    private function fetchRealtime(?string $slug): array
+    private function fetchRealtime(?string $slug, $portfolio): array
     {
         $propertyId = config('analytics.property_id');
 
         if (!$propertyId) {
-            return ['activeUsers' => 0];
+            return $this->emptyRealtimeResponse('GA4_PROPERTY_ID no configurado');
         }
 
         try {
@@ -222,29 +226,83 @@ class AnalyticsController extends Controller
                 'credentials' => $this->resolveCredentials(),
             ]);
 
-            $request = new RunRealtimeReportRequest([
-                'property' => 'properties/' . $propertyId,
+            $property = 'properties/' . $propertyId;
+            $rtFilter = ($slug && $portfolio) ? $this->buildRealtimeFilter($portfolio) : null;
+
+            // 1. Fetch active users totals
+            $totalsRequest = new RunRealtimeReportRequest([
+                'property' => $property,
                 'metrics' => [new Metric(['name' => 'activeUsers'])],
+                'dimension_filter' => $rtFilter,
             ]);
-
-            if ($slug) {
-                $request->setDimensionFilter($this->buildPageFilter($slug));
+            $totalsRes = $client->runRealtimeReport($totalsRequest);
+            $activeUsers = 0;
+            foreach ($totalsRes->getRows() as $row) {
+                $activeUsers += (int) $row->getMetricValues()[0]->getValue();
             }
 
-            $response = $client->runRealtimeReport($request);
-
-            $users = 0;
-            foreach ($response->getRows() as $row) {
-                $users += (int) $row->getMetricValues()[0]->getValue();
+            // 2. Fetch realtime devices
+            $devicesRequest = new RunRealtimeReportRequest([
+                'property' => $property,
+                'dimensions' => [new Dimension(['name' => 'deviceCategory'])],
+                'metrics' => [new Metric(['name' => 'activeUsers'])],
+                'dimension_filter' => $rtFilter,
+            ]);
+            $devicesRes = $client->runRealtimeReport($devicesRequest);
+            $devices = [];
+            foreach ($devicesRes->getRows() as $row) {
+                $devices[] = [
+                    'name' => $row->getDimensionValues()[0]->getValue() ?: 'Desconocido',
+                    'value' => (int) $row->getMetricValues()[0]->getValue(),
+                ];
             }
 
-            return ['activeUsers' => $users];
+            // 3. Fetch realtime countries
+            $countriesRequest = new RunRealtimeReportRequest([
+                'property' => $property,
+                'dimensions' => [new Dimension(['name' => 'country'])],
+                'metrics' => [new Metric(['name' => 'activeUsers'])],
+                'dimension_filter' => $rtFilter,
+            ]);
+            $countriesRes = $client->runRealtimeReport($countriesRequest);
+            $countries = [];
+            foreach ($countriesRes->getRows() as $row) {
+                $countries[] = [
+                    'name' => $row->getDimensionValues()[0]->getValue() ?: 'Desconocido',
+                    'users' => (int) $row->getMetricValues()[0]->getValue(),
+                ];
+            }
+
+            // 4. Fetch realtime events (recent interactions)
+            $eventsRequest = new RunRealtimeReportRequest([
+                'property' => $property,
+                'dimensions' => [new Dimension(['name' => 'eventName'])],
+                'metrics' => [new Metric(['name' => 'eventCount'])],
+                'dimension_filter' => $rtFilter,
+            ]);
+            $eventsRes = $client->runRealtimeReport($eventsRequest);
+            $events = [];
+            foreach ($eventsRes->getRows() as $row) {
+                $events[] = [
+                    'name' => $row->getDimensionValues()[0]->getValue() ?: 'unknown_event',
+                    'count' => (int) $row->getMetricValues()[0]->getValue(),
+                ];
+            }
+
+            return [
+                'realtime' => [
+                    'activeUsers' => $activeUsers,
+                    'devices' => $devices,
+                    'countries' => $countries,
+                    'events' => $events,
+                ]
+            ];
         } catch (\Throwable $e) {
             Log::error('Error en GA4 Realtime API: ' . $e->getMessage(), [
                 'slug' => $slug,
                 'trace' => $e->getTraceAsString(),
             ]);
-            return ['activeUsers' => 0];
+            return $this->emptyRealtimeResponse($e->getMessage());
         }
     }
 
@@ -256,6 +314,19 @@ class AnalyticsController extends Controller
                 'string_filter' => new StringFilter([
                     'match_type' => MatchType::CONTAINS,
                     'value' => "/p/{$slug}",
+                ]),
+            ]),
+        ]);
+    }
+
+    private function buildRealtimeFilter($portfolio): FilterExpression
+    {
+        return new FilterExpression([
+            'filter' => new Filter([
+                'field_name' => 'unifiedScreenName',
+                'string_filter' => new StringFilter([
+                    'match_type' => MatchType::CONTAINS,
+                    'value' => $portfolio->title,
                 ]),
             ]),
         ]);
@@ -324,10 +395,28 @@ class AnalyticsController extends Controller
         ];
     }
 
+    private function emptyRealtimeResponse(string $errorMessage): array
+    {
+        return [
+            'realtime' => [
+                'activeUsers' => 0,
+                'devices' => [],
+                'countries' => [],
+                'events' => [],
+            ],
+            'debug_error' => $errorMessage,
+        ];
+    }
+
     private function fullEmptyResponse(): array
     {
         return [
-            'realtime' => ['activeUsers' => 0],
+            'realtime' => [
+                'activeUsers' => 0,
+                'devices' => [],
+                'countries' => [],
+                'events' => [],
+            ],
             'historical' => $this->emptyHistoricalResponse(),
         ];
     }
