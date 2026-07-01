@@ -106,4 +106,33 @@ class LighthouseController extends Controller
             ], 500);
         }
     }
+
+    /**
+     * Save the compiled Lighthouse audit scores in the database.
+     */
+    public function saveResults(Request $request): JsonResponse
+    {
+        $portfolio = $request->user()->portfolio;
+
+        if (!$portfolio) {
+            return response()->json([
+                'message' => 'No se encontró un portafolio para este usuario.',
+            ], 404);
+        }
+
+        $validated = $request->validate([
+            'scores' => ['required', 'array'],
+        ]);
+
+        $portfolio->update([
+            'lighthouse_scores' => $validated['scores'],
+            'last_audited_at' => now(),
+        ]);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Métricas de auditoría guardadas correctamente.',
+            'portfolio' => $portfolio,
+        ], 200);
+    }
 }

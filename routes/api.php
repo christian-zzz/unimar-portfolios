@@ -68,6 +68,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Lighthouse Audit Routes
     Route::post('/audit/run', [LighthouseController::class, 'runAudit']);
+    Route::post('/audit/save', [LighthouseController::class, 'saveResults']);
 
     // Analytics GA4 Routes
     Route::get('/analytics/report', [AnalyticsController::class, 'getReport']);

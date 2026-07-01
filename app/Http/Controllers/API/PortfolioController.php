@@ -6,7 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Portfolio;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Throwable;
 
 class PortfolioController extends Controller
 {
@@ -123,96 +125,123 @@ class PortfolioController extends Controller
      */
     public function publish(Request $request): JsonResponse
     {
-        $portfolio = $request->user()->portfolio;
-        
-        if (!$portfolio) {
+        try {
+            $portfolio = $request->user()->portfolio;
+
+            if (!$portfolio) {
+                return response()->json([
+                    'message' => 'No se encontró un portafolio para este usuario.',
+                ], 404);
+            }
+
+            $request->validate([
+                'thumbnail' => ['nullable', 'image', 'max:5120'], // Max 5MB
+                'categories' => ['nullable', 'string'],
+                'remove_thumbnail' => ['nullable', 'string', 'in:true,false,1,0'],
+            ]);
+
+            $thumbnailPath = $portfolio->thumbnail_path;
+            $disk = env('FILESYSTEM_DISK_IMAGES', 'cloudinary_dev');
+
+            if ($request->input('remove_thumbnail') === 'true' || $request->input('remove_thumbnail') === '1') {
+                if ($thumbnailPath) {
+                    try {
+                        if (str_starts_with($thumbnailPath, 'http')) {
+                            $filename = basename($thumbnailPath);
+                            if (\Illuminate\Support\Facades\Storage::disk($disk)->exists($filename)) {
+                                \Illuminate\Support\Facades\Storage::disk($disk)->delete($filename);
+                            }
+                        } else {
+                            if (\Illuminate\Support\Facades\Storage::disk('public')->exists($thumbnailPath)) {
+                                \Illuminate\Support\Facades\Storage::disk('public')->delete($thumbnailPath);
+                            }
+                        }
+                    } catch (Throwable $e) {
+                        Log::warning('Failed to delete old thumbnail: ' . $e->getMessage());
+                    }
+                }
+                $thumbnailPath = null;
+            } elseif ($request->hasFile('thumbnail')) {
+                $file = $request->file('thumbnail');
+
+                // Delete old thumbnail if exists
+                if ($thumbnailPath) {
+                    try {
+                        if (str_starts_with($thumbnailPath, 'http')) {
+                            $filename = basename($thumbnailPath);
+                            if (\Illuminate\Support\Facades\Storage::disk($disk)->exists($filename)) {
+                                \Illuminate\Support\Facades\Storage::disk($disk)->delete($filename);
+                            }
+                        } else {
+                            if (\Illuminate\Support\Facades\Storage::disk('public')->exists($thumbnailPath)) {
+                                \Illuminate\Support\Facades\Storage::disk('public')->delete($thumbnailPath);
+                            }
+                        }
+                    } catch (Throwable $e) {
+                        Log::warning('Failed to delete old thumbnail: ' . $e->getMessage());
+                    }
+                }
+
+                // Upload new thumbnail
+                try {
+                    $path = $file->store('thumbnails', $disk);
+                    $thumbnailPath = \Illuminate\Support\Facades\Storage::disk($disk)->url($path);
+                } catch (Throwable $e) {
+                    Log::error('Failed to upload new thumbnail: ' . $e->getMessage());
+                    $thumbnailPath = $portfolio->thumbnail_path;
+                }
+
+                // Sync with media library
+                if ($thumbnailPath !== $portfolio->thumbnail_path) {
+                    try {
+                        $media = new \App\Models\Media();
+                        $media->user_id = $request->user()->id;
+                        $media->portfolio_id = $portfolio->id;
+                        $media->file_name = $file->getClientOriginalName();
+                        $media->file_path = $path ?? $file->getClientOriginalName();
+                        $media->mime_type = $file->getMimeType();
+                        $media->size = $file->getSize();
+                        $media->disk = $disk;
+                        $media->save();
+                    } catch (Throwable $e) {
+                        Log::warning('Could not sync cover image to media library: ' . $e->getMessage());
+                    }
+                }
+            }
+
+            // Copy draft_content to published_content and toggle live state
+            $portfolio->update([
+                'published_content' => $portfolio->draft_content,
+                'is_published' => true,
+                'thumbnail_path' => $thumbnailPath,
+            ]);
+
+            // Sync categories
+            $categoryIds = [];
+            if ($request->has('categories')) {
+                $categoriesVal = $request->input('categories');
+                if (is_array($categoriesVal)) {
+                    $categoryIds = $categoriesVal;
+                } elseif (is_string($categoriesVal) && trim($categoriesVal) !== '') {
+                    $categoryIds = array_filter(explode(',', $categoriesVal));
+                }
+            }
+            $portfolio->categories()->sync($categoryIds);
+
             return response()->json([
-                'message' => 'No se encontró un portafolio para este usuario.',
-            ], 404);
+                'message' => 'Portafolio publicado exitosamente en vivo.',
+                'portfolio' => $portfolio,
+            ]);
+        } catch (Throwable $e) {
+            Log::error('Portfolio publish failed: ' . $e->getMessage(), [
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            return response()->json([
+                'message' => 'Error al publicar el portafolio. Intente de nuevo.',
+                'error' => config('app.debug') ? $e->getMessage() : null,
+            ], 500);
         }
-
-        $request->validate([
-            'thumbnail' => ['nullable', 'image', 'max:5120'], // Max 5MB
-            'categories' => ['nullable', 'string'],
-            'remove_thumbnail' => ['nullable', 'string', 'in:true,false,1,0'],
-        ]);
-
-        $thumbnailPath = $portfolio->thumbnail_path;
-        if ($request->input('remove_thumbnail') === 'true' || $request->input('remove_thumbnail') === '1') {
-            if ($thumbnailPath) {
-                if (str_starts_with($thumbnailPath, 'http')) {
-                    $filename = basename($thumbnailPath);
-                    $disk = env('FILESYSTEM_DISK_IMAGES', 'cloudinary');
-                    if (\Illuminate\Support\Facades\Storage::disk($disk)->exists($filename)) {
-                        \Illuminate\Support\Facades\Storage::disk($disk)->delete($filename);
-                    }
-                } else {
-                    if (\Illuminate\Support\Facades\Storage::disk('public')->exists($thumbnailPath)) {
-                        \Illuminate\Support\Facades\Storage::disk('public')->delete($thumbnailPath);
-                    }
-                }
-            }
-            $thumbnailPath = null;
-        } elseif ($request->hasFile('thumbnail')) {
-            $file = $request->file('thumbnail');
-            $disk = env('FILESYSTEM_DISK_IMAGES', 'cloudinary');
-            
-            // Delete old one if exists
-            if ($thumbnailPath) {
-                if (str_starts_with($thumbnailPath, 'http')) {
-                    $filename = basename($thumbnailPath);
-                    if (\Illuminate\Support\Facades\Storage::disk($disk)->exists($filename)) {
-                        \Illuminate\Support\Facades\Storage::disk($disk)->delete($filename);
-                    }
-                } else {
-                    if (\Illuminate\Support\Facades\Storage::disk('public')->exists($thumbnailPath)) {
-                        \Illuminate\Support\Facades\Storage::disk('public')->delete($thumbnailPath);
-                    }
-                }
-            }
-            
-            $path = $file->store('thumbnails', $disk);
-            $thumbnailPath = \Illuminate\Support\Facades\Storage::disk($disk)->url($path);
-
-            // Sync with media library
-            try {
-                $media = new \App\Models\Media();
-                $media->user_id = $request->user()->id;
-                $media->portfolio_id = $portfolio->id;
-                $media->file_name = $file->getClientOriginalName();
-                $media->file_path = $path;
-                $media->mime_type = $file->getMimeType();
-                $media->size = $file->getSize();
-                $media->disk = $disk;
-                $media->save();
-            } catch (\Exception $e) {
-                \Illuminate\Support\Facades\Log::warning('Could not sync cover image to media library: ' . $e->getMessage());
-            }
-        }
-
-        // Copy draft_content to published_content and toggle live state
-        $portfolio->update([
-            'published_content' => $portfolio->draft_content,
-            'is_published' => true,
-            'thumbnail_path' => $thumbnailPath,
-        ]);
-
-        // Sync categories
-        $categoryIds = [];
-        if ($request->has('categories')) {
-            $categoriesVal = $request->input('categories');
-            if (is_array($categoriesVal)) {
-                $categoryIds = $categoriesVal;
-            } elseif (is_string($categoriesVal) && trim($categoriesVal) !== '') {
-                $categoryIds = array_filter(explode(',', $categoriesVal));
-            }
-        }
-        $portfolio->categories()->sync($categoryIds);
-
-        return response()->json([
-            'message' => 'Portafolio publicado exitosamente en vivo.',
-            'portfolio' => $portfolio,
-        ]);
     }
 
     /**
