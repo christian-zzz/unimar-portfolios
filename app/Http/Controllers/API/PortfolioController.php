@@ -141,7 +141,7 @@ class PortfolioController extends Controller
             ]);
 
             $thumbnailPath = $portfolio->thumbnail_path;
-            $disk = env('FILESYSTEM_DISK_IMAGES', 'cloudinary_dev');
+            $disk = env('FILESYSTEM_DISK_IMAGES', 'cloudinary');
 
             if ($request->input('remove_thumbnail') === 'true' || $request->input('remove_thumbnail') === '1') {
                 if ($thumbnailPath) {
