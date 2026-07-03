@@ -103,8 +103,8 @@
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <div class="logo">folium<span>.</span></div>
+        <div class="header" style="text-align: center; border-bottom: 1px solid #2A2640; padding-bottom: 20px; margin-bottom: 30px;">
+            <img src="{{ env('FRONTEND_URL') }}/logo.png" alt="Folium Logo" style="height: 38px; width: auto; vertical-align: middle; display: inline-block;">
         </div>
         
         <h1>¡Hola, {{ $student->name }}!</h1>
@@ -132,7 +132,7 @@
             Al ingresar por primera vez, te recomendamos actualizar tu contraseña desde la sección de perfil en tu panel de control.
         </p>
         
-        <a href="{{ url('/login') }}" class="btn" target="_blank">Iniciar Sesión en Folium</a>
+        <a href="{{ env('FRONTEND_URL') }}/login" class="btn" target="_blank">Iniciar Sesión en Folium</a>
         
         <div class="footer">
             Este correo es enviado de forma automática por el sistema de gestión estudiantil de Folium UNIMAR.<br>
