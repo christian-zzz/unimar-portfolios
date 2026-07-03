@@ -9,6 +9,7 @@
         "php": "^8.3",
         "cloudinary/cloudinary_php": "^3.1",
         "google/analytics-data": "^0.24.0",
+        "google/apiclient": "^2.19",
         "laravel/framework": "^13.7",
         "laravel/sanctum": "^4.3",
         "laravel/tinker": "^3.0",
