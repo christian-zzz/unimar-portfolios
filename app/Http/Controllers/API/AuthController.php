@@ -33,6 +33,7 @@ class AuthController extends Controller
 
         /** @var User $user */
         $user = Auth::user();
+        $user->update(['last_login_at' => now()]);
         $token = $user->createToken('auth-token')->plainTextToken;
 
         return response()->json([
@@ -91,5 +92,96 @@ class AuthController extends Controller
         return response()->json([
             'message' => 'Logged out successfully.',
         ], 200);
+    }
+
+    /**
+     * Send password reset request email.
+     */
+    public function forgotPassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'email' => ['required', 'string', 'email'],
+        ]);
+
+        $user = User::where('email', $request->email)->first();
+
+        if (!$user) {
+            return response()->json([
+                'message' => 'Ese correo no está registrado en el sistema.',
+            ], 422);
+        }
+
+        // Generate a secure token and store it
+        $token = Str::random(60);
+
+        \Illuminate\Support\Facades\DB::table('password_reset_tokens')->updateOrInsert(
+            ['email' => $user->email],
+            [
+                'token' => Hash::make($token),
+                'created_at' => now(),
+            ]
+        );
+
+        try {
+            Mail::to($user->email)->send(new \App\Mail\ForgotPasswordMail($user, $token));
+        } catch (\Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Fallo al enviar correo de recuperación: ' . $e->getMessage());
+        }
+
+        return response()->json([
+            'message' => 'Si el correo existe en nuestro sistema, se ha enviado un enlace de recuperación.',
+        ], 200);
+    }
+
+    /**
+     * Reset the user password using a valid token.
+     */
+    public function resetPassword(Request $request): JsonResponse
+    {
+        $request->validate([
+            'token' => ['required', 'string'],
+            'email' => ['required', 'string', 'email'],
+            'password' => ['required', 'string', 'min:8', 'confirmed'],
+        ]);
+
+        $record = \Illuminate\Support\Facades\DB::table('password_reset_tokens')
+            ->where('email', $request->email)
+            ->first();
+
+        if (!$record || !Hash::check($request->token, $record->token)) {
+            return response()->json([
+                'message' => 'El enlace de recuperación es inválido o ha expirado.',
+            ], 422);
+        }
+
+        // Expire token after 60 minutes
+        if (now()->parse($record->created_at)->addMinutes(60)->isPast()) {
+            \Illuminate\Support\Facades\DB::table('password_reset_tokens')
+                ->where('email', $request->email)
+                ->delete();
+
+            return response()->json([
+                'message' => 'El enlace de recuperación ha expirado.',
+            ], 422);
+        }
+
+        $user = User::where('email', $request->email)->first();
+        if ($user) {
+            $user->update([
+                'password' => Hash::make($request->password),
+            ]);
+
+            \Illuminate\Support\Facades\DB::table('password_reset_tokens')
+                ->where('email', $request->email)
+                ->delete();
+
+            return response()->json([
+                'message' => 'Tu contraseña ha sido restablecida exitosamente. Ya puedes iniciar sesión.',
+            ], 200);
+        }
+
+        return response()->json([
+            'message' => 'Error al restablecer la contraseña. Usuario no encontrado.',
+        ], 404);
     }
 }

@@ -23,8 +23,8 @@ class UserController extends Controller
 
         // Fetch students with eager loaded portfolio and media count/size aggregates
         $students = User::where('role', 'student')
-            ->select(['id', 'name', 'email', 'created_at'])
-            ->with(['portfolio:id,user_id,slug,is_published'])
+            ->select(['id', 'name', 'email', 'created_at', 'last_login_at'])
+            ->with(['portfolio:id,user_id,slug,is_published,thumbnail_path', 'portfolio.categories:id'])
             ->withCount('media')
             ->withSum('media as media_size', 'size')
             ->orderByDesc('created_at')

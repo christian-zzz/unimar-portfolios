@@ -136,7 +136,7 @@
         
         <div class="footer">
             Este correo es enviado de forma automática por el sistema de gestión de contraseñas de Folium UNIMAR.<br>
-            © {{ date('Y') }} Decanato de Diseño Gráfico, Universidad de Margarita. Todos los derechos reservados.
+            © {{ date('Y') }} Decanato de Humanidades, Universidad de Margarita. Todos los derechos reservados.
         </div>
     </div>
 </body>

@@ -53,6 +53,25 @@ class AnalyticsController extends Controller
         return response()->json($data);
     }
 
+    public function getStudentReport(string $studentId, Request $request): JsonResponse
+    {
+        if ($request->user()->role !== 'admin') {
+            return response()->json(['message' => 'Acceso denegado.'], 403);
+        }
+
+        $student = \App\Models\User::find($studentId);
+        if (!$student || !$student->portfolio || !$student->portfolio->slug) {
+            return response()->json($this->fullEmptyResponse());
+        }
+
+        $period = $request->query('period', '15d');
+        $force = $request->boolean('force', false);
+
+        $data = $this->resolveAnalytics($student->portfolio->slug, $period, $force, $student->portfolio);
+
+        return response()->json($data);
+    }
+
     private function resolveAnalytics(?string $slug, string $period, bool $force, $portfolio): array
     {
         if ($period === 'live') {
@@ -71,8 +90,10 @@ class AnalyticsController extends Controller
             $existing = $portfolio->analytics_data;
 
             if (!$force && $existing && isset($existing[$period])) {
-                $existing[$period]['last_updated_at'] = $portfolio->last_analytics_updated_at?->toIso8601String();
-                return ['historical' => $existing[$period]];
+                $cached = array_merge($this->emptyHistoricalResponse(), $existing[$period]);
+                $cached = $this->normalizeHistoricalData($cached);
+                $cached['last_updated_at'] = $portfolio->last_analytics_updated_at?->toIso8601String();
+                return ['historical' => $cached];
             }
 
             $fresh = $this->fetchHistorical($slug, $days);
@@ -88,7 +109,8 @@ class AnalyticsController extends Controller
         $setting = AppSetting::find($settingKey);
 
         if (!$force && $setting && $setting->value) {
-            $val = $setting->value;
+            $val = array_merge($this->emptyHistoricalResponse(), $setting->value);
+            $val = $this->normalizeHistoricalData($val);
             $val['last_updated_at'] = $setting->updated_at?->toIso8601String();
             return ['historical' => $val];
         }
@@ -121,6 +143,7 @@ class AnalyticsController extends Controller
             $dateRange = new DateRange(['start_date' => "{$days}daysAgo", 'end_date' => 'today']);
             $pageFilter = $slug ? $this->buildPageFilter($slug) : null;
 
+            // 1. Daily breakdown + totals
             $dailyRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
                 'date_ranges' => [$dateRange],
@@ -148,8 +171,9 @@ class AnalyticsController extends Controller
                 ];
             }
 
-            $totals = $this->extractTotals($dailyRes);
+            $totals = $this->extractTotals($dailyRes, $daily);
 
+            // 2. Devices
             $devices = [];
             $devRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
@@ -165,6 +189,7 @@ class AnalyticsController extends Controller
                 ];
             }
 
+            // 3. Sources — filter out (not set), rename remaining
             $sources = [];
             $srcRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
@@ -174,25 +199,115 @@ class AnalyticsController extends Controller
                 'dimension_filter' => $pageFilter,
             ]));
             foreach ($srcRes->getRows() as $row) {
+                $name = $row->getDimensionValues()[0]->getValue() ?: '';
+                if ($name === '(not set)' || $name === '') {
+                    $name = 'Directo / Desconocido';
+                }
                 $sources[] = [
-                    'name' => $row->getDimensionValues()[0]->getValue() ?: 'direct',
+                    'name' => $name,
                     'users' => (int) $row->getMetricValues()[0]->getValue(),
                 ];
             }
 
+            // 4. Countries — use countryId (ISO alpha-2), filter out (not set)
             $countries = [];
             $cntRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
                 'date_ranges' => [$dateRange],
-                'dimensions' => [new Dimension(['name' => 'country'])],
+                'dimensions' => [new Dimension(['name' => 'countryId'])],
                 'metrics' => [new Metric(['name' => 'activeUsers'])],
                 'dimension_filter' => $pageFilter,
             ]));
             foreach ($cntRes->getRows() as $row) {
+                $code = $row->getDimensionValues()[0]->getValue() ?: '';
+                $users = (int) $row->getMetricValues()[0]->getValue();
+                if ($code === '(not set)' || $code === '') continue;
                 $countries[] = [
-                    'name' => $row->getDimensionValues()[0]->getValue() ?: 'Desconocido',
+                    'code' => $code,
+                    'users' => $users,
+                ];
+            }
+
+            // 5. Top pages
+            $topPages = [];
+            $pagesRes = $client->runReport(new RunReportRequest([
+                'property' => $property,
+                'date_ranges' => [$dateRange],
+                'dimensions' => [new Dimension(['name' => 'pagePath'])],
+                'metrics' => [new Metric(['name' => 'screenPageViews'])],
+                'dimension_filter' => $pageFilter,
+                'limit' => 10,
+            ]));
+            foreach ($pagesRes->getRows() as $row) {
+                $topPages[] = [
+                    'path' => $row->getDimensionValues()[0]->getValue() ?: '/',
+                    'views' => (int) $row->getMetricValues()[0]->getValue(),
+                ];
+            }
+
+            // 6. New vs Returning
+            $newVsReturning = [];
+            $nvrRes = $client->runReport(new RunReportRequest([
+                'property' => $property,
+                'date_ranges' => [$dateRange],
+                'dimensions' => [new Dimension(['name' => 'newVsReturning'])],
+                'metrics' => [new Metric(['name' => 'activeUsers'])],
+                'dimension_filter' => $pageFilter,
+            ]));
+            foreach ($nvrRes->getRows() as $row) {
+                $newVsReturning[] = [
+                    'type' => $row->getDimensionValues()[0]->getValue() ?: 'unknown',
                     'users' => (int) $row->getMetricValues()[0]->getValue(),
                 ];
+            }
+
+            // 7. Landing pages (top 5)
+            $landingPages = [];
+            $lpRes = $client->runReport(new RunReportRequest([
+                'property' => $property,
+                'date_ranges' => [$dateRange],
+                'dimensions' => [new Dimension(['name' => 'landingPage'])],
+                'metrics' => [new Metric(['name' => 'sessions'])],
+                'dimension_filter' => $pageFilter,
+                'limit' => 5,
+            ]));
+            foreach ($lpRes->getRows() as $row) {
+                $landingPages[] = [
+                    'path' => $row->getDimensionValues()[0]->getValue() ?: '/',
+                    'sessions' => (int) $row->getMetricValues()[0]->getValue(),
+                ];
+            }
+
+            // 8. Historical events (top 10)
+            $events = [];
+            $evtRes = $client->runReport(new RunReportRequest([
+                'property' => $property,
+                'date_ranges' => [$dateRange],
+                'dimensions' => [new Dimension(['name' => 'eventName'])],
+                'metrics' => [new Metric(['name' => 'eventCount'])],
+                'dimension_filter' => $pageFilter,
+                'limit' => 10,
+            ]));
+            foreach ($evtRes->getRows() as $row) {
+                $events[] = [
+                    'name' => $row->getDimensionValues()[0]->getValue() ?: 'unknown',
+                    'count' => (int) $row->getMetricValues()[0]->getValue(),
+                ];
+            }
+
+            // 9. Engagement rate
+            $engagementRate = '0%';
+            $engRes = $client->runReport(new RunReportRequest([
+                'property' => $property,
+                'date_ranges' => [$dateRange],
+                'metrics' => [new Metric(['name' => 'engagementRate'])],
+                'dimension_filter' => $pageFilter,
+            ]));
+            foreach ($engRes->getRows() as $row) {
+                $val = (float) $row->getMetricValues()[0]->getValue();
+                $engagementRate = $val > 1
+                    ? number_format($val, 1) . '%'
+                    : number_format($val * 100, 1) . '%';
             }
 
             return [
@@ -201,6 +316,11 @@ class AnalyticsController extends Controller
                 'devices' => $devices,
                 'sources' => $sources,
                 'countries' => $countries,
+                'topPages' => $topPages,
+                'newVsReturning' => $newVsReturning,
+                'landingPages' => $landingPages,
+                'events' => $events,
+                'engagementRate' => $engagementRate,
             ];
         } catch (\Throwable $e) {
             Log::error('Error en GA4 Historical API: ' . $e->getMessage(), [
@@ -257,19 +377,22 @@ class AnalyticsController extends Controller
                 ];
             }
 
-            // 3. Fetch realtime countries
+            // 3. Fetch realtime countries — use countryId, filter (not set)
             $countriesRequest = new RunRealtimeReportRequest([
                 'property' => $property,
-                'dimensions' => [new Dimension(['name' => 'country'])],
+                'dimensions' => [new Dimension(['name' => 'countryId'])],
                 'metrics' => [new Metric(['name' => 'activeUsers'])],
                 'dimension_filter' => $rtFilter,
             ]);
             $countriesRes = $client->runRealtimeReport($countriesRequest);
             $countries = [];
             foreach ($countriesRes->getRows() as $row) {
+                $code = $row->getDimensionValues()[0]->getValue() ?: '';
+                $users = (int) $row->getMetricValues()[0]->getValue();
+                if ($code === '(not set)' || $code === '') continue;
                 $countries[] = [
-                    'name' => $row->getDimensionValues()[0]->getValue() ?: 'Desconocido',
-                    'users' => (int) $row->getMetricValues()[0]->getValue(),
+                    'code' => $code,
+                    'users' => $users,
                 ];
             }
 
@@ -332,26 +455,46 @@ class AnalyticsController extends Controller
         ]);
     }
 
-    private function extractTotals($response): array
+    private function extractTotals($response, array $dailyRows): array
     {
+        // Attempt to read totals from GA4 response first
         $totalsRows = $response->getTotals();
         if ($totalsRows && $totalsRows->count() > 0) {
             $m = $totalsRows[0]->getMetricValues();
-            return [
-                'activeUsers' => (int) $m[0]->getValue(),
-                'screenPageViews' => (int) $m[1]->getValue(),
-                'bounceRate' => $this->formatBounceRate((float) $m[2]->getValue()),
-                'newUsers' => (int) $m[3]->getValue(),
-                'averageSessionDuration' => round((float) $m[4]->getValue(), 1),
-            ];
+            $activeUsers = (int) $m[0]->getValue();
+            $screenPageViews = (int) $m[1]->getValue();
+            $bounceRate = $this->formatBounceRate((float) $m[2]->getValue());
+            $newUsers = (int) $m[3]->getValue();
+            $averageSessionDuration = round((float) $m[4]->getValue(), 1);
+
+            // If totals look correct, use them
+            if ($activeUsers > 0 || $screenPageViews > 0) {
+                return compact('activeUsers', 'screenPageViews', 'bounceRate', 'newUsers', 'averageSessionDuration');
+            }
         }
 
+        // Fallback: compute totals from daily rows
+        $activeUsers = 0;
+        $screenPageViews = 0;
+        $newUsers = 0;
+        $totalDuration = 0;
+        $dailyCount = count($dailyRows);
+
+        foreach ($dailyRows as $row) {
+            $activeUsers += $row['users'];
+            $screenPageViews += $row['views'];
+            $newUsers += $row['newUsers'];
+            $totalDuration += $row['avgDuration'];
+        }
+
+        $averageSessionDuration = $dailyCount > 0 ? round($totalDuration / $dailyCount, 1) : 0;
+
         return [
-            'activeUsers' => 0,
-            'screenPageViews' => 0,
-            'bounceRate' => '0%',
-            'newUsers' => 0,
-            'averageSessionDuration' => 0,
+            'activeUsers' => $activeUsers,
+            'screenPageViews' => $screenPageViews,
+            'bounceRate' => '—',
+            'newUsers' => $newUsers,
+            'averageSessionDuration' => $averageSessionDuration,
         ];
     }
 
@@ -378,6 +521,21 @@ class AnalyticsController extends Controller
         return number_format($value * 100, 1) . '%';
     }
 
+    private function normalizeHistoricalData(array $data): array
+    {
+        // Convert old country format { name, users } to new format { code, users }
+        if (isset($data['countries']) && is_array($data['countries'])) {
+            $data['countries'] = array_map(function ($c) {
+                if (isset($c['code'])) return $c;
+                if (isset($c['name'])) {
+                    return ['code' => $c['name'], 'users' => $c['users'] ?? 0];
+                }
+                return $c;
+            }, $data['countries']);
+        }
+        return $data;
+    }
+
     private function emptyHistoricalResponse(): array
     {
         return [
@@ -392,6 +550,11 @@ class AnalyticsController extends Controller
             'devices' => [],
             'sources' => [],
             'countries' => [],
+            'topPages' => [],
+            'newVsReturning' => [],
+            'landingPages' => [],
+            'events' => [],
+            'engagementRate' => '0%',
         ];
     }
 

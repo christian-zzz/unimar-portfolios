@@ -228,6 +228,8 @@ class PortfolioController extends Controller
             }
             $portfolio->categories()->sync($categoryIds);
 
+            $portfolio->load('categories:id');
+
             return response()->json([
                 'message' => 'Portafolio publicado exitosamente en vivo.',
                 'portfolio' => $portfolio,

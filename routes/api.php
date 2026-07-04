@@ -32,6 +32,8 @@ Route::get('/health', function () {
 
 // Public API Routes (unprotected)
 Route::post('/login', [AuthController::class, 'login']);
+Route::post('/forgot-password', [AuthController::class, 'forgotPassword']);
+Route::post('/reset-password', [AuthController::class, 'resetPassword']);
 Route::get('/public/portfolios', [PortfolioController::class, 'indexPublic']);
 Route::get('/public/portfolios/{slug}', [PortfolioController::class, 'showPublic']);
 Route::get('/public/categories', [CategoryController::class, 'indexPublic']);
@@ -75,6 +77,9 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Analytics GA4 Routes (Admin — unfiltered global)
     Route::get('/admin/analytics/report', [AnalyticsController::class, 'getGlobalReport']);
+
+    // Analytics GA4 Routes (Admin — scoped to a specific student)
+    Route::get('/admin/students/{id}/analytics', [AnalyticsController::class, 'getStudentReport']);
 
     // Media Upload Route
     Route::get('/media', [MediaController::class, 'index']);
