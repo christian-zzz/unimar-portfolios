@@ -33,6 +33,15 @@ class AuthController extends Controller
 
         /** @var User $user */
         $user = Auth::user();
+
+        $maintenance = \App\Models\AppSetting::find('maintenance_mode')?->value['enabled'] ?? false;
+        if ($maintenance && $user->role !== 'admin') {
+            Auth::logout();
+            return response()->json([
+                'message' => 'La plataforma está en mantenimiento. Intenta más tarde.'
+            ], 503);
+        }
+
         $user->update(['last_login_at' => now()]);
         $token = $user->createToken('auth-token')->plainTextToken;
 
