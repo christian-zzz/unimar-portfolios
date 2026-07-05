@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rules\Password;
 
 class ProfileController extends Controller
@@ -53,5 +54,39 @@ class ProfileController extends Controller
         return response()->json([
             'message' => 'Contraseña actualizada exitosamente.',
         ], 200);
+    }
+
+    public function updateAvatar(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $request->validate([
+            'avatar' => ['required', 'image', 'mimes:jpeg,png,webp,gif', 'max:2048'],
+        ]);
+
+        $file = $request->file('avatar');
+        $publicId = 'avatars/' . $user->id;
+
+        $stored = $file->storeAs('avatars', $user->id, 'cloudinary');
+        if (!$stored) {
+            return response()->json(['message' => 'Error al subir la imagen.'], 500);
+        }
+
+        $url = Storage::disk('cloudinary')->url($publicId);
+        $user->update(['avatar_url' => $url]);
+
+        return response()->json(['avatar_url' => $url], 200);
+    }
+
+    public function deleteAvatar(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if ($user->avatar_url) {
+            Storage::disk('cloudinary')->delete('avatars/' . $user->id);
+            $user->update(['avatar_url' => null]);
+        }
+
+        return response()->json(['message' => 'Avatar eliminado.'], 200);
     }
 }

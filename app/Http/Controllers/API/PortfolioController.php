@@ -274,7 +274,7 @@ class PortfolioController extends Controller
      */
     public function indexPublic(Request $request): JsonResponse
     {
-        $query = Portfolio::with(['user:id,name', 'categories:id,name,slug'])
+        $query = Portfolio::with(['user:id,name,avatar_url', 'categories:id,name,slug'])
             ->where('is_published', true);
 
         // Search by title or user name
@@ -307,7 +307,7 @@ class PortfolioController extends Controller
      */
     public function showPublic(string $slug): JsonResponse
     {
-        $portfolio = Portfolio::with('user:id,name,email')
+        $portfolio = Portfolio::with('user:id,name,email,avatar_url')
             ->where('slug', $slug)
             ->first();
 
@@ -331,6 +331,7 @@ class PortfolioController extends Controller
             'author' => [
                 'name' => $portfolio->user->name,
                 'email' => $portfolio->user->email,
+                'avatar_url' => $portfolio->user->avatar_url,
             ],
             'last_updated' => $portfolio->updated_at->toIso8601String(),
         ]);

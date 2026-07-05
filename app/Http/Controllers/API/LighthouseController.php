@@ -38,7 +38,11 @@ class LighthouseController extends Controller
 
         try {
             // High timeout for Google API
-            $response = Http::timeout(60)->get($apiUrl);
+            $response = Http::timeout(60)
+                ->retry(2, 1000, function ($exception, $response) {
+                    return $exception || ($response && $response->failed());
+                })
+                ->get($apiUrl);
 
             if ($response->failed()) {
                 return response()->json([

@@ -9,6 +9,7 @@ use App\Http\Controllers\API\MediaController;
 use App\Http\Controllers\API\PortfolioController;
 use App\Http\Controllers\API\CategoryController;
 use App\Http\Controllers\API\AdminController;
+use App\Http\Controllers\API\AppSettingController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -54,6 +55,12 @@ Route::middleware('auth:sanctum')->group(function () {
     // User Profile Routes
     Route::put('/user/profile', [ProfileController::class, 'updateProfile']);
     Route::put('/user/password', [ProfileController::class, 'updatePassword']);
+    Route::post('/user/avatar', [ProfileController::class, 'updateAvatar']);
+    Route::delete('/user/avatar', [ProfileController::class, 'deleteAvatar']);
+
+    // Admin Platform Settings
+    Route::get('/admin/settings', [AppSettingController::class, 'index']);
+    Route::put('/admin/settings/{key}', [AppSettingController::class, 'update']);
 
     // Admin Stats Route
     Route::get('/admin/stats', [AdminController::class, 'stats']);
@@ -62,6 +69,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/admin/students/{id}/unpublish', [AdminController::class, 'unpublishStudentPortfolio']);
     Route::get('/admin/students/{id}/media', [AdminController::class, 'getStudentMedia']);
     Route::post('/admin/students/{id}/reset-password', [AdminController::class, 'resetStudentPassword']);
+    Route::post('/admin/students/{id}/send-email', [AdminController::class, 'sendEmail']);
     Route::delete('/admin/students/{id}', [AdminController::class, 'destroyStudent']);
 
     // Students Management Routes

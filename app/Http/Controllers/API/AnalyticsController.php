@@ -90,7 +90,7 @@ class AnalyticsController extends Controller
             $existing = $portfolio->analytics_data;
 
             if (!$force && $existing && isset($existing[$period])) {
-                $cached = array_merge($this->emptyHistoricalResponse(), $existing[$period]);
+                $cached = $this->deepMergeHistorical($this->emptyHistoricalResponse(), $existing[$period]);
                 $cached = $this->normalizeHistoricalData($cached);
                 $cached['last_updated_at'] = $portfolio->last_analytics_updated_at?->toIso8601String();
                 return ['historical' => $cached];
@@ -109,7 +109,7 @@ class AnalyticsController extends Controller
         $setting = AppSetting::find($settingKey);
 
         if (!$force && $setting && $setting->value) {
-            $val = array_merge($this->emptyHistoricalResponse(), $setting->value);
+            $val = $this->deepMergeHistorical($this->emptyHistoricalResponse(), $setting->value);
             $val = $this->normalizeHistoricalData($val);
             $val['last_updated_at'] = $setting->updated_at?->toIso8601String();
             return ['historical' => $val];
@@ -189,27 +189,7 @@ class AnalyticsController extends Controller
                 ];
             }
 
-            // 3. Sources — filter out (not set), rename remaining
-            $sources = [];
-            $srcRes = $client->runReport(new RunReportRequest([
-                'property' => $property,
-                'date_ranges' => [$dateRange],
-                'dimensions' => [new Dimension(['name' => 'sessionSource'])],
-                'metrics' => [new Metric(['name' => 'activeUsers'])],
-                'dimension_filter' => $pageFilter,
-            ]));
-            foreach ($srcRes->getRows() as $row) {
-                $name = $row->getDimensionValues()[0]->getValue() ?: '';
-                if ($name === '(not set)' || $name === '') {
-                    $name = 'Directo / Desconocido';
-                }
-                $sources[] = [
-                    'name' => $name,
-                    'users' => (int) $row->getMetricValues()[0]->getValue(),
-                ];
-            }
-
-            // 4. Countries — use countryId (ISO alpha-2), filter out (not set)
+            // 3. Countries — use countryId (ISO alpha-2), filter out (not set)
             $countries = [];
             $cntRes = $client->runReport(new RunReportRequest([
                 'property' => $property,
@@ -314,7 +294,6 @@ class AnalyticsController extends Controller
                 'totals' => $totals,
                 'daily' => $daily,
                 'devices' => $devices,
-                'sources' => $sources,
                 'countries' => $countries,
                 'topPages' => $topPages,
                 'newVsReturning' => $newVsReturning,
@@ -327,7 +306,7 @@ class AnalyticsController extends Controller
                 'slug' => $slug,
                 'trace' => $e->getTraceAsString(),
             ]);
-            return array_merge($this->emptyHistoricalResponse(), [
+            return $this->deepMergeHistorical($this->emptyHistoricalResponse(), [
                 'debug_error' => $e->getMessage()
             ]);
         }
@@ -397,19 +376,45 @@ class AnalyticsController extends Controller
             }
 
             // 4. Fetch realtime events (recent interactions)
-            $eventsRequest = new RunRealtimeReportRequest([
-                'property' => $property,
-                'dimensions' => [new Dimension(['name' => 'eventName'])],
-                'metrics' => [new Metric(['name' => 'eventCount'])],
-                'dimension_filter' => $rtFilter,
-            ]);
-            $eventsRes = $client->runRealtimeReport($eventsRequest);
+            // Note: eventName + eventCount is incompatible with unifiedScreenName filter
+            // for students. Fall back gracefully.
             $events = [];
-            foreach ($eventsRes->getRows() as $row) {
-                $events[] = [
-                    'name' => $row->getDimensionValues()[0]->getValue() ?: 'unknown_event',
-                    'count' => (int) $row->getMetricValues()[0]->getValue(),
-                ];
+            try {
+                $eventsRequest = new RunRealtimeReportRequest([
+                    'property' => $property,
+                    'dimensions' => [new Dimension(['name' => 'eventName'])],
+                    'metrics' => [new Metric(['name' => 'eventCount'])],
+                    'dimension_filter' => $rtFilter,
+                ]);
+                $eventsRes = $client->runRealtimeReport($eventsRequest);
+                foreach ($eventsRes->getRows() as $row) {
+                    $events[] = [
+                        'name' => $row->getDimensionValues()[0]->getValue() ?: 'unknown_event',
+                        'count' => (int) $row->getMetricValues()[0]->getValue(),
+                    ];
+                }
+            } catch (\Throwable $e) {
+                Log::warning('GA4 Realtime events query failed (non-fatal): ' . $e->getMessage());
+            }
+
+            // 5. Fetch realtime activity recency (minutesAgo)
+            $recency = [];
+            try {
+                $recencyRequest = new RunRealtimeReportRequest([
+                    'property' => $property,
+                    'dimensions' => [new Dimension(['name' => 'minutesAgo'])],
+                    'metrics' => [new Metric(['name' => 'activeUsers'])],
+                    'dimension_filter' => $rtFilter,
+                ]);
+                $recencyRes = $client->runRealtimeReport($recencyRequest);
+                foreach ($recencyRes->getRows() as $row) {
+                    $recency[] = [
+                        'minutesAgo' => (int) $row->getDimensionValues()[0]->getValue(),
+                        'activeUsers' => (int) $row->getMetricValues()[0]->getValue(),
+                    ];
+                }
+            } catch (\Throwable $e) {
+                Log::warning('GA4 Realtime recency query failed (non-fatal): ' . $e->getMessage());
             }
 
             return [
@@ -418,6 +423,7 @@ class AnalyticsController extends Controller
                     'devices' => $devices,
                     'countries' => $countries,
                     'events' => $events,
+                    'recency' => $recency,
                 ]
             ];
         } catch (\Throwable $e) {
@@ -521,6 +527,21 @@ class AnalyticsController extends Controller
         return number_format($value * 100, 1) . '%';
     }
 
+    private function deepMergeHistorical(array $defaults, array $cached): array
+    {
+        foreach ($defaults as $key => $default) {
+            if (array_key_exists($key, $cached)) {
+                if (is_array($default) && is_array($cached[$key])) {
+                    // Deep merge nested arrays (e.g. totals)
+                    $cached[$key] = array_merge($default, $cached[$key]);
+                }
+            } else {
+                $cached[$key] = $default;
+            }
+        }
+        return $cached;
+    }
+
     private function normalizeHistoricalData(array $data): array
     {
         // Convert old country format { name, users } to new format { code, users }
@@ -548,7 +569,6 @@ class AnalyticsController extends Controller
             ],
             'daily' => [],
             'devices' => [],
-            'sources' => [],
             'countries' => [],
             'topPages' => [],
             'newVsReturning' => [],
@@ -566,6 +586,7 @@ class AnalyticsController extends Controller
                 'devices' => [],
                 'countries' => [],
                 'events' => [],
+                'recency' => [],
             ],
             'debug_error' => $errorMessage,
         ];
@@ -579,6 +600,7 @@ class AnalyticsController extends Controller
                 'devices' => [],
                 'countries' => [],
                 'events' => [],
+                'recency' => [],
             ],
             'historical' => $this->emptyHistoricalResponse(),
         ];

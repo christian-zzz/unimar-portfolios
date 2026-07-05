@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Exception;
+use App\Models\AppSetting;
 use App\Models\Media;
 
 class MediaController extends Controller
@@ -48,13 +49,22 @@ class MediaController extends Controller
      */
     public function upload(Request $request): JsonResponse
     {
-        // 1. Validate the incoming request
+        $maxMb = AppSetting::find('max_upload_mb')?->value['mb'] ?? 10;
+        $maxKb = $maxMb * 1024;
+        $allowed = AppSetting::find('allowed_mime_types')?->value['types'] ?? [
+            'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml',
+            'video/mp4', 'video/webm', 'video/quicktime',
+            'application/pdf', 'application/json',
+            'font/woff', 'font/woff2', 'application/font-woff', 'application/font-woff2',
+            'model/gltf-binary',
+        ];
+
         $validator = Validator::make($request->all(), [
-            'file' => ['required', 'file', 'max:10240'], // Max size 10MB (10240 KB)
+            'file' => ['required', 'file', "max:{$maxKb}"],
         ], [
             'file.required' => 'El archivo es obligatorio.',
             'file.file' => 'El archivo debe ser un archivo válido.',
-            'file.max' => 'El tamaño máximo permitido es de 10 MB.',
+            'file.max' => "El tamaño máximo permitido es de {$maxMb} MB.",
         ]);
 
         if ($validator->fails()) {
@@ -68,6 +78,13 @@ class MediaController extends Controller
         try {
             $file = $request->file('file');
             $mimeType = $file->getMimeType();
+
+            if (!in_array($mimeType, $allowed, true)) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => "El tipo de archivo ({$mimeType}) no está permitido.",
+                ], 422);
+            }
 
             // 2. Routing logic based on MIME type
             if (str_starts_with($mimeType, 'image/')) {

@@ -9,6 +9,9 @@ use App\Models\Media;
 use App\Models\Category;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
+use App\Mail\AdminStudentMail;
 
 class AdminController extends Controller
 {
@@ -136,6 +139,41 @@ class AdminController extends Controller
             'message' => 'Contraseña restablecida y enviada por correo.',
             'generated_password' => $newPassword,
         ]);
+    }
+
+    /**
+     * Send a custom email from admin to a student.
+     */
+    public function sendEmail(string $studentId, Request $request): JsonResponse
+    {
+        if ($request->user()->role !== 'admin') {
+            return response()->json(['message' => 'Acceso denegado.'], 403);
+        }
+
+        $validated = $request->validate([
+            'subject' => 'required|string|max:255',
+            'message' => 'required|string|max:10000',
+        ]);
+
+        $student = User::where('role', 'student')->findOrFail($studentId);
+
+        try {
+            Mail::to($student->email)->send(new AdminStudentMail(
+                $student,
+                $validated['subject'],
+                $validated['message']
+            ));
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Correo enviado exitosamente a ' . $student->name . '.',
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Fallo al enviar correo administrador-estudiante: ' . $e->getMessage());
+            return response()->json([
+                'message' => 'Error al enviar el correo. Intenta de nuevo.',
+            ], 500);
+        }
     }
 
     /**
