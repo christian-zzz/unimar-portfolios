@@ -7,8 +7,6 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Symfony\Component\Process\Process;
-use Symfony\Component\Process\Exception\ProcessFailedException;
 
 class BackupController extends Controller
 {
@@ -58,66 +56,60 @@ class BackupController extends Controller
         $timestamp = now()->format('Y-m-d_H-i-s');
         $backupName = "backup_{$timestamp}.sql.gz";
         $tempDir = storage_path('app/temp');
+        $tempSql = "{$tempDir}/backup_{$timestamp}.sql";
 
         if (!is_dir($tempDir)) {
             mkdir($tempDir, 0755, true);
         }
 
-        $tempPath = "{$tempDir}/{$backupName}";
-
         $command = sprintf(
-            'pg_dump --dbname=%s --no-owner --no-acl 2>/dev/null | gzip > %s',
+            'pg_dump --dbname=%s --no-owner --no-acl > %s 2>/dev/null',
             escapeshellArg($dbUrl),
-            escapeshellArg($tempPath)
+            escapeshellArg($tempSql)
         );
 
-        Log::info('Iniciando creación de respaldo: ' . $backupName);
+        Log::info('Iniciando respaldo: ' . $backupName);
 
-        $process = Process::fromShellCommandline($command);
-        $process->setTimeout(300);
-        $process->run();
+        exec($command, $execOutput, $exitCode);
 
-        if (!$process->isSuccessful()) {
-            if (file_exists($tempPath)) {
-                unlink($tempPath);
+        if ($exitCode !== 0) {
+            if (file_exists($tempSql)) {
+                unlink($tempSql);
             }
-            $errorOutput = $process->getErrorOutput();
-            Log::error('Error al ejecutar pg_dump: ' . $errorOutput);
-            return response()->json([
-                'message' => 'Error al crear el respaldo.',
-            ], 500);
+            Log::error('Error en pg_dump (exit code: ' . $exitCode . ')');
+            return response()->json(['message' => 'Error al crear el respaldo.'], 500);
         }
 
-        if (!file_exists($tempPath) || filesize($tempPath) === 0) {
+        if (!file_exists($tempSql) || filesize($tempSql) === 0) {
             Log::error('Respaldo generado vacío.');
             return response()->json(['message' => 'El respaldo generado está vacío.'], 500);
+        }
+
+        $sql = file_get_contents($tempSql);
+        unlink($tempSql);
+
+        $compressed = gzencode($sql, 9);
+        if ($compressed === false) {
+            Log::error('Error al comprimir el respaldo.');
+            return response()->json(['message' => 'Error al comprimir el respaldo.'], 500);
         }
 
         $r2Path = 'backups/' . $backupName;
 
         try {
-            $stream = fopen($tempPath, 'r');
-            Storage::disk('r2')->writeStream($r2Path, $stream);
-            fclose($stream);
+            Storage::disk('r2')->put($r2Path, $compressed);
         } catch (\Exception $e) {
-            if (file_exists($tempPath)) {
-                unlink($tempPath);
-            }
-            if (isset($stream) && is_resource($stream)) {
-                fclose($stream);
-            }
             Log::error('Error al subir backup a R2: ' . $e->getMessage());
             return response()->json(['message' => 'Error al almacenar el respaldo en R2.'], 500);
         }
 
-        unlink($tempPath);
         Log::info('Respaldo creado exitosamente: ' . $backupName);
 
         try {
             $size = Storage::disk('r2')->size($r2Path);
             $lastModified = Storage::disk('r2')->lastModified($r2Path);
         } catch (\Exception $e) {
-            $size = 0;
+            $size = strlen($compressed);
             $lastModified = now()->timestamp;
         }
 
