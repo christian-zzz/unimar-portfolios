@@ -6,12 +6,15 @@ RUN apt-get update && apt-get install -y \
     curl \
     unzip \
     libpq-dev \
-    && docker-php-ext-install \
+    postgresql-client \
+    && install-php-extensions \
         pdo \
         pdo_pgsql \
         pgsql \
         pcntl \
         bcmath \
+        gd \
+        zip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

@@ -7,13 +7,15 @@
     "license": "MIT",
     "require": {
         "php": "^8.3",
+        "barryvdh/laravel-dompdf": "^3.1",
         "cloudinary/cloudinary_php": "^3.1",
         "google/analytics-data": "^0.24.0",
         "google/apiclient": "^2.19",
         "laravel/framework": "^13.7",
         "laravel/sanctum": "^4.3",
         "laravel/tinker": "^3.0",
-        "league/flysystem-aws-s3-v3": "^3.0"
+        "league/flysystem-aws-s3-v3": "^3.0",
+        "openspout/openspout": "^4.26"
     },
     "require-dev": {
         "fakerphp/faker": "^1.23",

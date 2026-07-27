@@ -7,9 +7,12 @@ use App\Http\Controllers\API\UserController;
 use App\Http\Controllers\API\AnalyticsController;
 use App\Http\Controllers\API\MediaController;
 use App\Http\Controllers\API\PortfolioController;
+use App\Http\Controllers\API\PortfolioRevisionController;
 use App\Http\Controllers\API\CategoryController;
 use App\Http\Controllers\API\AdminController;
 use App\Http\Controllers\API\AppSettingController;
+use App\Http\Controllers\API\BackupController;
+use App\Http\Controllers\API\ReportController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
@@ -52,6 +55,13 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/portfolio/publish', [PortfolioController::class, 'publish']);
     Route::post('/portfolio/unpublish', [PortfolioController::class, 'unpublish']);
 
+    // Portfolio Revision Routes
+    Route::get('/portfolio/revisions', [PortfolioRevisionController::class, 'index']);
+    Route::post('/portfolio/revisions', [PortfolioRevisionController::class, 'store']);
+    Route::put('/portfolio/revisions/{id}', [PortfolioRevisionController::class, 'update']);
+    Route::post('/portfolio/revisions/{id}/restore', [PortfolioRevisionController::class, 'restore']);
+    Route::delete('/portfolio/revisions/{id}', [PortfolioRevisionController::class, 'destroy']);
+
     // User Profile Routes
     Route::put('/user/profile', [ProfileController::class, 'updateProfile']);
     Route::put('/user/password', [ProfileController::class, 'updatePassword']);
@@ -64,6 +74,15 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // Admin Stats Route
     Route::get('/admin/stats', [AdminController::class, 'stats']);
+
+    // Admin Backup Routes
+    Route::get('/admin/backups', [BackupController::class, 'index']);
+    Route::post('/admin/backups', [BackupController::class, 'store']);
+    Route::get('/admin/backups/{filename}/download', [BackupController::class, 'download']);
+    Route::delete('/admin/backups/{filename}', [BackupController::class, 'destroy']);
+
+    // Admin Report Routes
+    Route::post('/admin/reports/generate', [ReportController::class, 'generate']);
 
     // Admin Student Management Actions
     Route::post('/admin/students/{id}/unpublish', [AdminController::class, 'unpublishStudentPortfolio']);

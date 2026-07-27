@@ -7,7 +7,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
-#[Fillable(['portfolio_id', 'content'])]
+#[Fillable(['portfolio_id', 'label', 'content'])]
 class PortfolioRevision extends Model
 {
     use HasUuids;

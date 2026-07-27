@@ -76,7 +76,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <img src="{{ env('FRONTEND_URL') }}/logo.png" alt="Folium Logo" style="height: 38px; width: auto; vertical-align: middle; display: inline-block;">
+            <img src="{{ env('FRONTEND_URL') }}/logo-text.png" alt="Folium" style="height: 38px; width: auto; vertical-align: middle; display: inline-block;">
         </div>
         
         <h1>Hola, {{ $student->name }}</h1>

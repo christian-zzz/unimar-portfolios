@@ -86,6 +86,18 @@ class PortfolioController extends Controller
             'title' => $validated['title'] ?? $portfolio->title,
         ]);
 
+        // Auto-snapshot on draft save
+        $portfolio->revisions()->create([
+            'content' => $validated['draft_content'],
+            'label'   => 'Auto: Borrador guardado ' . now()->format('d/m/Y H:i'),
+        ]);
+
+        // Enforce 20-revision cap
+        $revisionCount = $portfolio->revisions()->count();
+        if ($revisionCount > 20) {
+            $portfolio->revisions()->oldest('created_at')->take($revisionCount - 20)->delete();
+        }
+
         return response()->json([
             'message' => 'Borrador guardado exitosamente.',
             'portfolio' => $portfolio,
@@ -138,6 +150,7 @@ class PortfolioController extends Controller
                 'thumbnail' => ['nullable', 'image', 'max:5120'], // Max 5MB
                 'categories' => ['nullable', 'string'],
                 'remove_thumbnail' => ['nullable', 'string', 'in:true,false,1,0'],
+                'draft_content' => ['nullable', 'string'],
             ]);
 
             $thumbnailPath = $portfolio->thumbnail_path;
@@ -209,8 +222,29 @@ class PortfolioController extends Controller
                 }
             }
 
+            // Use draft_content from request if provided (inline save)
+            if ($request->filled('draft_content')) {
+                $decoded = json_decode($request->input('draft_content'), true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    $portfolio->draft_content = $decoded;
+                }
+            }
+
+            // Auto-snapshot before publish
+            $portfolio->revisions()->create([
+                'content' => $portfolio->draft_content,
+                'label'   => 'Auto: Publicación ' . now()->format('d/m/Y H:i'),
+            ]);
+
+            // Enforce 20-revision cap
+            $revisionCount = $portfolio->revisions()->count();
+            if ($revisionCount > 20) {
+                $portfolio->revisions()->oldest('created_at')->take($revisionCount - 20)->delete();
+            }
+
             // Copy draft_content to published_content and toggle live state
             $portfolio->update([
+                'draft_content' => $portfolio->draft_content,
                 'published_content' => $portfolio->draft_content,
                 'is_published' => true,
                 'thumbnail_path' => $thumbnailPath,
