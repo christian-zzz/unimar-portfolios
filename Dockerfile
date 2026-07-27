@@ -1,4 +1,8 @@
-FROM dunglas/frankenphp:latest
+# Stage 1: Get pg_dump binary from official PostgreSQL image
+FROM postgres:16-bookworm AS pg
+
+# Stage 2: Main FrankenPHP app
+FROM dunglas/frankenphp:bookworm
 
 # Install system dependencies and required PHP extensions
 RUN apt-get update && apt-get install -y \
@@ -6,7 +10,6 @@ RUN apt-get update && apt-get install -y \
     curl \
     unzip \
     libpq-dev \
-    postgresql-client \
     && install-php-extensions \
         pdo \
         pdo_pgsql \
@@ -17,6 +20,9 @@ RUN apt-get update && apt-get install -y \
         zip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy pg_dump from the PostgreSQL stage (no apt dependency needed)
+COPY --from=pg /usr/bin/pg_dump /usr/bin/pg_dump
 
 # Increase PHP upload limits for FrankenPHP
 RUN echo "upload_max_filesize = 20M" > /usr/local/etc/php/conf.d/uploads.ini \
