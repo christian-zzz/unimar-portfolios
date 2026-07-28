@@ -151,6 +151,7 @@ class PortfolioController extends Controller
                 'categories' => ['nullable', 'string'],
                 'remove_thumbnail' => ['nullable', 'string', 'in:true,false,1,0'],
                 'draft_content' => ['nullable', 'string'],
+                'settings' => ['nullable', 'string'],
             ]);
 
             $thumbnailPath = $portfolio->thumbnail_path;
@@ -235,6 +236,14 @@ class PortfolioController extends Controller
                 'content' => $portfolio->draft_content,
                 'label'   => 'Auto: Publicación ' . now()->format('d/m/Y H:i'),
             ]);
+
+            // Save settings if provided
+            if ($request->filled('settings')) {
+                $decoded = json_decode($request->input('settings'), true);
+                if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                    $portfolio->settings = $decoded;
+                }
+            }
 
             // Enforce 20-revision cap
             $revisionCount = $portfolio->revisions()->count();
